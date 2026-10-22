@@ -2,6 +2,8 @@
 
 A Pokémon TCG deck-building sandbox that runs in your browser. It's one file (`index.html`): open it, build decks with any card ever printed, and test them.
 
+**Open it: https://merkran114.github.io/holo-bench/** (works on phones too)
+
 ## What it does
 
 - **Search every card**: by name, set code or number, with filters for format (Standard, Expanded, Unlimited), card type, Pokémon type, stage and set. An **AI** search mode understands plain English, like "supporters that draw cards" or "basic water pokemon with free retreat".
@@ -15,7 +17,7 @@ A Pokémon TCG deck-building sandbox that runs in your browser. It's one file (`
 
 ## Using it
 
-Open `index.html` in Chrome, Edge or Safari, or use the GitHub Pages link for this repository. It needs an internet connection. Decks, your collection and settings are saved in the browser you use, not online.
+Use the link above, or download `index.html` and open it in Chrome, Edge or Safari. It needs an internet connection. Decks, your collection and settings are saved in the browser you use, not online.
 
 ## Data
 
