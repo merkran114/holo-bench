@@ -307,6 +307,9 @@ textarea.ta:focus{outline:none;border-color:var(--accent)}
 .shops .row-btns{display:flex;flex-wrap:wrap;gap:6px}
 .shop-link{display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 12px;border-radius:9px;border:1px solid var(--line);background:var(--raise);color:var(--ink);font-size:13.5px;font-weight:600;text-decoration:none}
 .shop-link:hover{border-color:var(--accent);color:var(--accent)}
+.shop-link.cheap{border-color:var(--ok);background:var(--ok-soft);color:var(--ok);box-shadow:0 0 0 1px var(--ok)}
+.shop-link.cheap small{color:var(--ok);font-weight:600}
+.shop-link.cheap:hover{color:var(--ok);filter:brightness(1.05)}
 .shop-link small{font-weight:500;color:var(--muted);font-size:11.5px}
 .shop-link svg{width:13px;height:13px;flex:none;opacity:.7}
 .ctl{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:12px;border-radius:12px;background:var(--sunk)}
@@ -1037,7 +1040,11 @@ function ensureCard(id) {
   if (c && !c.stub && c.v === 2 && Date.now() - (c.t || 0) < STALE) return Promise.resolve(c);
   if (inflight.has(id)) return inflight.get(id);
   const p = fetchJSON('/cards/' + encodeURIComponent(id)).then(raw => {
-    CACHE[id] = compact(raw); saveCache(); inflight.delete(id); return CACHE[id];
+    const fresh = compact(raw), prev = CACHE[id]?.price;
+    // price feeds sometimes come back empty; keep the last price we knew rather than losing it
+    if (fresh.price.usd == null && prev?.usd != null) Object.assign(fresh.price, { usd: prev.usd, usdSrc: prev.usdSrc || 'earlier data', usdDate: prev.usdDate });
+    if (fresh.price.eur == null && prev?.eur != null) fresh.price.eur = prev.eur;
+    CACHE[id] = fresh; saveCache(); inflight.delete(id); return CACHE[id];
   }).catch(e => { inflight.delete(id); if (c && !c.stub) return c; throw e; });
   inflight.set(id, p);
   return p;
@@ -1528,7 +1535,11 @@ async function openDetail(id) {
   renderDetail(id);
   const dlg = $('#detail');
   if (!dlg.open) dlg.showModal();
-  try { await ensureCard(id); if (detailId === id) renderDetail(id); }
+  try {
+    await ensureCard(id); if (detailId === id) renderDetail(id);
+    // no TCGplayer price from TCGdex: ask pokemontcg.io, then refresh just the shop buttons
+    fillUsd(id).then(ok => { const box = $('#dtShops'); if (ok && detailId === id && box) box.outerHTML = shopLinksHTML(id, CACHE[id]); });
+  }
   catch { if (detailId === id) $('#dtText').innerHTML = '<p class="err">Couldn\'t load the card text. Check your connection and reopen the card.</p>'; }
   loadPrints(id);
 }
@@ -1547,8 +1558,54 @@ function shopLinks(id, c) {
 }
 const EXT_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>';
 const shopA = ([name, url, sub], cls = 'shop-link') => `<a class="${cls}" href="${esc(url)}" target="_blank" rel="noopener noreferrer" title="Open ${esc(name)} in a new tab">${esc(name)}${sub ? ` <small>${esc(sub)}</small>` : ''}${EXT_ICON}</a>`;
+// EUR -> USD rate for comparing Cardmarket (euros) with TCGplayer (dollars); refreshed once a day
+// from the European Central Bank rates on frankfurter.dev, with a fallback if it can't be reached
+let fx = store.get('fx', { rate: 1.12, t: 0 });
+function refreshFx() {
+  if (Date.now() - fx.t < 864e5) return;
+  fetch('https://api.frankfurter.dev/v1/latest?base=EUR&symbols=USD').then(r => r.json()).then(j => {
+    if (j?.rates?.USD > 0) { fx = { rate: j.rates.USD, t: Date.now(), date: j.date }; store.set('fx', fx); }
+  }).catch(() => {});
+}
 function shopLinksHTML(id, c) {
-  return `<div class="shops"><h4 class="eyebrow">Find this card</h4><div class="row-btns">${shopLinks(id, c).map(l => shopA(l)).join('')}</div></div>`;
+  const pr = c.price || {};
+  const prices = { TCGplayer: pr.usd, Cardmarket: pr.eur };
+  // compare in dollars; only highlight when both shops have a price
+  const usd = { TCGplayer: pr.usd ?? null, Cardmarket: pr.eur != null ? pr.eur * fx.rate : null };
+  const both = usd.TCGplayer != null && usd.Cardmarket != null;
+  const tie = both && Math.abs(usd.TCGplayer - usd.Cardmarket) < 0.01;
+  const cheapest = both && !tie ? (usd.Cardmarket < usd.TCGplayer ? 'Cardmarket' : 'TCGplayer') : null;
+  const links = shopLinks(id, c).map(([name, url, sub]) => {
+    if (prices[name] == null) return shopA([name, url, sub]);
+    const label = name === 'TCGplayer' ? fmtUSD.format(pr.usd) : `${fmtEUR.format(pr.eur)} ≈ ${fmtUSD.format(usd.Cardmarket)}`;
+    return shopA([name, url, name === cheapest ? `${label} · cheapest` : label], name === cheapest ? 'shop-link cheap' : 'shop-link');
+  });
+  const saving = both ? Math.abs(usd.TCGplayer - usd.Cardmarket) : 0;
+  const src = pr.usdSrc ? ` TCGplayer price from ${pr.usdSrc}${pr.usdDate ? `, updated ${pr.usdDate}` : ''}.` : '';
+  return `<div class="shops" id="dtShops"><h4 class="eyebrow">Find this card</h4><div class="row-btns">${links.join('')}</div>
+${both ? `<p class="note" style="margin:0">${tie ? 'Both shops cost about the same' : `${cheapest} is ${fmtUSD.format(saving)} cheaper`} at today's rate (1 € = ${fmtUSD.format(fx.rate)}). Market averages, before shipping.${src}</p>` : ''}</div>`;
+}
+// backup TCGplayer prices from pokemontcg.io, which shares its card ids with the Scrydex images
+const usdTried = new Map();
+async function fillUsd(id) {
+  const c = CACHE[id];
+  if (!c || c.stub || c.price?.usd != null) return false;
+  if (Date.now() - (usdTried.get(id) || 0) < 10 * 60e3) return false;
+  usdTried.set(id, Date.now());
+  for (let i = 0; i < 3; i++) {
+    try {
+      const r = await fetch(`https://api.pokemontcg.io/v2/cards/${encodeURIComponent(scrydexId(id))}?select=tcgplayer`);
+      if (r.status >= 500) { await new Promise(res => setTimeout(res, 800 * (i + 1))); continue; }
+      if (!r.ok) return false;
+      const t = (await r.json()).data?.tcgplayer;
+      const vals = Object.values(t?.prices || {}).map(v => v?.market ?? v?.mid).filter(v => v > 0);
+      if (!vals.length) return false;
+      c.price = { ...c.price, usd: Math.min(...vals), usdSrc: 'pokemontcg.io', usdDate: t.updatedAt };
+      saveCache();
+      return true;
+    } catch { await new Promise(res => setTimeout(res, 800 * (i + 1))); }
+  }
+  return false;
 }
 function renderDetail(id) {
   const c = CACHE[id], img = imgOf(id), loading = c.stub;
@@ -3907,6 +3964,7 @@ const SAMPLE = [
 function boot() {
   applyTheme();
   probeImageHost();
+  refreshFx();
   if (!Array.isArray(decks) || !decks.length) {
     const cards = {};
     for (const [id, n, name] of SAMPLE) { cards[id] = n; if (!CACHE[id]) CACHE[id] = { id, name, img: artBase(id, '', name), stub: true, set: { id: setOf(id) } }; }
