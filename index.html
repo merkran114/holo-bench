@@ -688,6 +688,18 @@ button.ch-item{cursor:pointer}
       <div class="frow">
         <div class="pips types" id="types" role="group" aria-label="Pokémon type"></div>
         <span class="spacer" style="flex:1"></span>
+        <select class="sel" id="tierSel" aria-label="Pokémon tier">
+          <option value="">All tiers</option>
+          <option value="rulebox">Rule box: ex, V, GX &amp; more</option>
+          <option value="ex">Pokémon ex (Scarlet &amp; Violet on)</option>
+          <option value="mega">Mega Evolution</option>
+          <option value="v">V, VSTAR, VMAX, V-UNION</option>
+          <option value="gx">GX and TAG TEAM</option>
+          <option value="EX">EX (Black &amp; White, XY)</option>
+          <option value="oldex">ex (2003–2007)</option>
+          <option value="special">Radiant, ◇, BREAK, LEGEND, LV.X, ★</option>
+          <option value="single">Single-Prize (no rule box)</option>
+        </select>
         <select class="sel" id="setSel" aria-label="Set"><option value="">All sets</option></select>
         <select class="sel" id="sortSel" aria-label="Sort">
           <option value="new">Newest first</option><option value="old">Oldest first</option><option value="name">Name A–Z</option>
@@ -931,7 +943,7 @@ function getJSON(path) {
 }
 
 // ---------- state ----------
-const prefs = Object.assign({ cat: 'all', types: [], sub: '', set: '', sort: 'new', dedupe: false, legalOnly: true, ai: false, preview: true, mode: 'build', spread: false, markMissing: false, cardSize: 160, theme: 'auto', tab: 'list' }, store.get('prefs', {}));
+const prefs = Object.assign({ cat: 'all', types: [], sub: '', set: '', tier: '', sort: 'new', dedupe: false, legalOnly: true, ai: false, preview: true, mode: 'build', spread: false, markMissing: false, cardSize: 160, theme: 'auto', tab: 'list' }, store.get('prefs', {}));
 const savePrefs = debounce(() => store.set('prefs', prefs), 150);
 const BRIEF = new Map();                 // id -> {id,name,num,img,set,k}
 const CACHE = store.get('cards', {});    // id -> compact card details
@@ -1108,17 +1120,40 @@ function idSet(fmt, param) {
 }
 function numKey(n) { const v = parseInt(n, 10); return isNaN(v) ? 1e6 : v; }
 
+
+// ---------- Pokémon tiers ----------
+// Read from the card name, as printed: lowercase "ex" (Scarlet & Violet on, and 2003-2007),
+// uppercase "EX" (Black & White, XY), "GX", the V family, Mega Evolution and the rarer rule boxes.
+const OLD_EX_SET = /^(ex\d|exu|np|pop)/;
+const TIERS = {
+  ex: c => / ex$/.test(c.name) && !OLD_EX_SET.test(c.set),
+  oldex: c => / ex$/.test(c.name) && OLD_EX_SET.test(c.set),
+  mega: c => /^(Mega |M )/.test(c.name),
+  v: c => / (V|VMAX|VSTAR|V-UNION)$/.test(c.name),
+  gx: c => /[ -]GX$/.test(c.name),
+  EX: c => /[ -]EX$/.test(c.name),
+  special: c => /^Radiant |◇| BREAK$| LEGEND$|LV\.?X|☆|★/.test(c.name),
+};
+const isRuleBox = c => Object.values(TIERS).some(f => f(c));
+function tierIs(c, tier) {
+  if (tier === 'rulebox') return isRuleBox(c);
+  if (tier === 'single') return !isRuleBox(c);
+  return TIERS[tier] ? TIERS[tier](c) : true;
+}
+
 // every card in a format's pool that passes the current filters and search terms
 async function matchCards(fmt, terms) {
   const pool = await poolFor(fmt);
   const groups = [];
   if (prefs.cat !== 'all') groups.push([`category=${prefs.cat}`]);
+  else if (prefs.tier) groups.push(['category=Pokemon']);
   if (prefs.types.length && (prefs.cat === 'all' || prefs.cat === 'Pokemon')) groups.push(prefs.types.map(t => `types=${t}`));
   if (prefs.sub) groups.push([prefs.sub]);
   const sets = await Promise.all(groups.map(g => Promise.all(g.map(p => idSet(fmt, p)))));
   const out = pool.filter(c => {
       if (POCKET.has(c.set)) return false;
       if (prefs.set && c.set !== prefs.set) return false;
+      if (prefs.tier && prefs.cat !== 'Trainer' && prefs.cat !== 'Energy' && !tierIs(c, prefs.tier)) return false;
       for (const g of sets) if (!g.some(s => s.has(c.id))) return false;
       for (const t of terms) {
         if (c.k.includes(t)) continue;
@@ -1241,7 +1276,7 @@ function renderGrid(reset) {
   $('#sentinel').hidden = shown >= results.length;
 }
 function clearFilters() {
-  $('#q').value = ''; prefs.cat = 'all'; prefs.types = []; prefs.sub = ''; prefs.set = '';
+  $('#q').value = ''; prefs.cat = 'all'; prefs.types = []; prefs.sub = ''; prefs.set = ''; prefs.tier = '';
   savePrefs(); syncFilterUI(); applyFilters();
 }
 function updateBadges() {
@@ -1835,6 +1870,8 @@ function syncFilterUI() {
   $('#types').dataset.any = String(prefs.types.length > 0);
   $$('#types button').forEach(b => b.setAttribute('aria-pressed', String(prefs.types.includes(b.dataset.t))));
   $('#sortSel').value = prefs.sort;
+  $('#tierSel').value = prefs.tier || '';
+  $('#tierSel').hidden = prefs.cat === 'Trainer' || prefs.cat === 'Energy';
   $('#dedupe').checked = prefs.dedupe;
   $('#pvToggle').checked = prefs.preview;
   $('#legalOnly').checked = prefs.legalOnly;
@@ -1868,6 +1905,7 @@ $('#fmt').addEventListener('click', e => {
   renderDeck(); syncFilterUI(); applyFilters();
 });
 $('#setSel').addEventListener('change', e => { prefs.set = e.target.value; savePrefs(); applyFilters(); });
+$('#tierSel').addEventListener('change', e => { prefs.tier = e.target.value; savePrefs(); applyFilters(); });
 $('#sortSel').addEventListener('change', e => { prefs.sort = e.target.value; savePrefs(); applyFilters(); });
 $('#dedupe').addEventListener('change', e => { prefs.dedupe = e.target.checked; savePrefs(); applyFilters(); });
 $('#legalOnly').addEventListener('change', e => { prefs.legalOnly = e.target.checked; savePrefs(); applyFilters(); });
